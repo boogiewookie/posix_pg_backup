@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/bin/sh
+
+# https://wiki.postgresql.org/wiki/Automated_Backup_on_Linux converted to Posix shell
 
 ###########################
 ####### LOAD CONFIG #######
@@ -8,7 +10,7 @@ while [ $# -gt 0 ]; do
         case $1 in
                 -c)
                         if [ -r "$2" ]; then
-                                source "$2"
+                                . "$2"
                                 shift 2
                         else
                                 ${ECHO} "Unreadable config file \"$2\"" 1>&2
@@ -24,7 +26,7 @@ done
 
 if [ $# = 0 ]; then
         SCRIPTPATH=$(cd ${0%/*} && pwd -P)
-        source $SCRIPTPATH/pg_backup.config
+        . $SCRIPTPATH/pg_backup.config
 fi;
 
 ###########################
@@ -70,18 +72,20 @@ fi;
 ### GLOBALS BACKUPS ###
 #######################
 
-echo -e "\n\nPerforming globals backup"
-echo -e "--------------------------------------------\n"
+printf -- "\n\nPerforming globals backup\n"
+printf -- "--------------------------------------------\n\n"
 
 if [ $ENABLE_GLOBALS_BACKUPS = "yes" ]
 then
         echo "Globals backup"
 
+        set -o pipefail
         if ! pg_dumpall -g -h "$HOSTNAME" -U "$USERNAME" | gzip > $FINAL_BACKUP_DIR"globals".sql.gz.in_progress; then
                 echo "[!!ERROR!!] Failed to produce globals backup" 1>&2
         else
                 mv $FINAL_BACKUP_DIR"globals".sql.gz.in_progress $FINAL_BACKUP_DIR"globals".sql.gz
         fi
+        set +o pipefail
 else
 	echo "None"
 fi
@@ -91,29 +95,31 @@ fi
 ### SCHEMA-ONLY BACKUPS ###
 ###########################
 
-for SCHEMA_ONLY_DB in ${SCHEMA_ONLY_LIST//,/ }
+for SCHEMA_ONLY_DB in $( echo "$SCHEMA_ONLY_LIST" | tr -s " ," " " )
 do
 	SCHEMA_ONLY_CLAUSE="$SCHEMA_ONLY_CLAUSE or datname ~ '$SCHEMA_ONLY_DB'"
 done
 
 SCHEMA_ONLY_QUERY="select datname from pg_database where false $SCHEMA_ONLY_CLAUSE order by datname;"
 
-echo -e "\n\nPerforming schema-only backups"
-echo -e "--------------------------------------------\n"
+printf -- "\n\nPerforming schema-only backups\n"
+printf -- "--------------------------------------------\n\n"
 
 SCHEMA_ONLY_DB_LIST=`psql -h "$HOSTNAME" -U "$USERNAME" -At -c "$SCHEMA_ONLY_QUERY" postgres`
 
-echo -e "The following databases were matched for schema-only backup:\n${SCHEMA_ONLY_DB_LIST}\n"
+printf -- "The following databases were matched for schema-only backup:\n${SCHEMA_ONLY_DB_LIST}\n\n"
 
 for DATABASE in $SCHEMA_ONLY_DB_LIST
 do
 	echo "Schema-only backup of $DATABASE"
 
+	set -o pipefail
 	if ! pg_dump -Fp -s -h "$HOSTNAME" -U "$USERNAME" "$DATABASE" | gzip > $FINAL_BACKUP_DIR"$DATABASE"_SCHEMA.sql.gz.in_progress; then
 		echo "[!!ERROR!!] Failed to backup database schema of $DATABASE" 1>&2
 	else
 		mv $FINAL_BACKUP_DIR"$DATABASE"_SCHEMA.sql.gz.in_progress $FINAL_BACKUP_DIR"$DATABASE"_SCHEMA.sql.gz
 	fi
+	set +o pipefail
 done
 
 
@@ -121,15 +127,15 @@ done
 ###### FULL BACKUPS #######
 ###########################
 
-for SCHEMA_ONLY_DB in ${SCHEMA_ONLY_LIST//,/ }
+for SCHEMA_ONLY_DB in $( echo "$SCHEMA_ONLY_LIST" | tr -s " ," " " )
 do
 	EXCLUDE_SCHEMA_ONLY_CLAUSE="$EXCLUDE_SCHEMA_ONLY_CLAUSE and datname !~ '$SCHEMA_ONLY_DB'"
 done
 
 FULL_BACKUP_QUERY="select datname from pg_database where not datistemplate and datallowconn $EXCLUDE_SCHEMA_ONLY_CLAUSE order by datname;"
 
-echo -e "\n\nPerforming full backups"
-echo -e "--------------------------------------------\n"
+printf -- "\n\nPerforming full backups\n"
+printf -- "--------------------------------------------\n\n"
 
 for DATABASE in `psql -h "$HOSTNAME" -U "$USERNAME" -At -c "$FULL_BACKUP_QUERY" postgres`
 do
@@ -137,11 +143,13 @@ do
 	then
 		echo "Plain backup of $DATABASE"
 
+		set -o pipefail
 		if ! pg_dump -Fp -h "$HOSTNAME" -U "$USERNAME" "$DATABASE" | gzip > $FINAL_BACKUP_DIR"$DATABASE".sql.gz.in_progress; then
 			echo "[!!ERROR!!] Failed to produce plain backup database $DATABASE" 1>&2
 		else
 			mv $FINAL_BACKUP_DIR"$DATABASE".sql.gz.in_progress $FINAL_BACKUP_DIR"$DATABASE".sql.gz
 		fi
+		set +o pipefail
 	fi
 
 	if [ $ENABLE_CUSTOM_BACKUPS = "yes" ]
@@ -155,16 +163,6 @@ do
 		fi
 	fi
 
-	if [ $ENABLE_TAR_GZ_BACKUPS = "yes" ]
-	then
-		echo "Tarball backup of $DATABASE"
-
-		if ! pg_dump -Ft -h "$HOSTNAME" -U "$USERNAME" "$DATABASE" | gzip > $FINAL_BACKUP_DIR"$DATABASE".sql.gz.in_progress; then
-			echo "[!!ERROR!!] Failed to produce gzipped tarball backup of database $DATABASE" 1>&2
-		else
-			mv $FINAL_BACKUP_DIR"$DATABASE".sql.gz.in_progress $FINAL_BACKUP_DIR"$DATABASE".sql.gz
-		fi
-	fi
 done
 
-echo -e "\nAll database backups complete!"
+printf -- "\nAll database backups complete!\n"
